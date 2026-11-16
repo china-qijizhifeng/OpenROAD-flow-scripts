@@ -69,10 +69,22 @@ proc ::orfs_t::end { name mark code } {
     $step $name $n $wall $cpu $d $parent $code]
 }
 
+# Name of the original of a wrapped command: in the command's own namespace, so a wrapped namespaced proc
+# (e.g. sta::max_slew_check_slack_limit) keeps resolving its unqualified calls there.
+proc ::orfs_t::orig_name { name } {
+  set name [string trimleft $name :]
+  set ns [namespace qualifiers $name]
+  set tail [namespace tail $name]
+  if { $ns eq "" } {
+    return ::__orfst_$tail
+  }
+  return ::${ns}::__orfst_$tail
+}
+
 # Replace command <name> by a timed wrapper that calls the original in the caller's frame.
 # A command that does not exist (e.g. in yosys) or is already wrapped is left alone.
 proc ::orfs_t::wrap { name } {
-  set orig ::__orfst_[string map {:: __} [string trimleft $name :]]
+  set orig [::orfs_t::orig_name $name]
   if { [info commands ::$name] eq "" || [info commands $orig] ne "" } {
     return
   }
@@ -87,6 +99,8 @@ proc ::orfs_t::wrap { name } {
 
 # Commands the step scripts call directly (not through log_cmd), the ORFS procs around them and the
 # report commands inside report_metrics. Called at the end of load.tcl (OpenROAD only).
+# A wrapped command must not be one that report commands call while their output is redirected into a report
+# file (e.g. sta::format_time inside report_tns): its ORFS_CMD line would land in the report.
 proc ::orfs_t::install { } {
   if { [info commands ::ord::get_db] eq "" } {
     return
@@ -105,9 +119,67 @@ proc ::orfs_t::install { } {
     report_clock_min_period report_fmax_metric report_clock_skew report_clock_skew_metric
     report_checks report_check_types report_erc_metrics find_timing_paths all_registers
     report_power report_power_metric detailed_route
+    sta::max_slew_check_slack sta::max_slew_check_limit sta::max_slew_check_slack_limit
+    sta::max_fanout_check_slack sta::max_fanout_check_limit sta::max_fanout_check_slack_limit
+    sta::max_capacitance_check_slack sta::max_capacitance_check_limit
+    sta::max_capacitance_check_slack_limit sta::max_slew_violation_count
+    sta::max_fanout_violation_count sta::max_capacitance_violation_count
+    sta::endpoint_violation_count all_inputs report_puts report_design_area
+    get_power_file_scope_args
   } {
     ::orfs_t::wrap $name
   }
+  # ORFS_RM_PROBE=1: before report_metrics the timing graph is brought up to date with
+  # three timed calls (delay calculation, arrivals, required times), so the update the first report command
+  # would trigger implicitly is measured on its own. The reports then see the same graph state.
+  if { [info exists ::env(ORFS_RM_PROBE)] && $::env(ORFS_RM_PROBE) eq "1" } {
+    foreach name { report_metrics } {
+      ::orfs_t::probe_before $name
+    }
+  }
+}
+
+proc ::orfs_rm_probe_delays { } {
+  ::orfs_t::probe_call ::sta::find_delays
+}
+
+proc ::orfs_rm_probe_arrivals { } {
+  ::orfs_t::probe_call ::sta::find_timing_cmd 0
+}
+
+proc ::orfs_rm_probe_requireds { } {
+  ::orfs_t::probe_call ::sta::find_requireds
+}
+
+proc ::orfs_t::probe_call { cmd args } {
+  if { [info commands $cmd] eq "" } {
+    puts "ORFS_RM_PROBE missing $cmd"
+    return
+  }
+  $cmd {*}$args
+}
+
+proc ::orfs_rm_probe { } {
+  ::orfs_rm_probe_delays
+  ::orfs_rm_probe_arrivals
+  ::orfs_rm_probe_requireds
+}
+
+# Run ::orfs_rm_probe before every call of <name>. The timed wrapper of <name> is installed before this, so the
+# probe is its own depth-0 call (orfs_rm_probe with three children) right before the timed <name> call.
+proc ::orfs_t::probe_before { name } {
+  set orig ::__orfsprobe_$name
+  if { [info commands ::$name] eq "" || [info commands $orig] ne "" } {
+    return
+  }
+  foreach p { orfs_rm_probe_delays orfs_rm_probe_arrivals orfs_rm_probe_requireds orfs_rm_probe } {
+    ::orfs_t::wrap $p
+  }
+  rename ::$name $orig
+  proc ::$name args [string map [list @ORIG@ $orig] {
+    ::orfs_rm_probe
+    uplevel 1 [list @ORIG@ {*}$args]
+  }]
 }
 
 if { ![info exists ::orfs_t::started] } {
@@ -129,7 +201,7 @@ proc log_cmd { cmd args } {
     set start [clock seconds]
   }
   # A command with its own timed wrapper (::orfs_t::wrap) is timed there.
-  set orfs_t_own [expr { [info commands ::__orfst_[string map {:: __} [string trimleft $cmd :]]] eq "" }]
+  set orfs_t_own [expr { [info commands [::orfs_t::orig_name $cmd]] eq "" }]
   if { $orfs_t_own } {
     set orfs_t_mark [::orfs_t::begin $cmd]
   }

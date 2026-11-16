@@ -64,3 +64,9 @@ proc load_design { design_file sdc_file } {
 
 # N0.2 measurement patch: timed wrappers (util.tcl ::orfs_t), prints ORFS_CMD lines only.
 ::orfs_t::install
+
+# Async report_metrics (kit patch v2): report_metrics as background jobs when ORFS_ASYNC_REPORTS=1.
+if { [info exists ::env(ORFS_ASYNC_REPORTS)] && $::env(ORFS_ASYNC_REPORTS) eq "1"
+  && [info commands ::ord::get_db] ne "" } {
+  source $::env(SCRIPTS_DIR)/async_reports.tcl
+}
