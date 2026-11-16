@@ -201,6 +201,10 @@ configuration file.
 | <a name="NUM_CORES"></a>NUM_CORES| Passed to `openroad -threads $(NUM_CORES)`, defaults to numbers of cores in system as determined by system specific code in Makefile, `nproc` is tried first. OpenROAD does not limit itself to this number of cores across OpenROAD running instances, which can lead to overprovisioning in contexts such as bazel-orfs where there could be many routing, or place jobs running at the same time.| |
 | <a name="OPENROAD_HIERARCHICAL"></a>OPENROAD_HIERARCHICAL| Feature toggle to enable to run OpenROAD in hierarchical mode, otherwise considered flat. Will eventually be the default and this option will be retired.| 0|
 | <a name="OPT_POST_GRT_WNS"></a>OPT_POST_GRT_WNS| Optimize WNS after global routing by additional repair_timing that uses VT swap and wire rerouting only to minimize placement and routing disturbance| 1|
+| <a name="ORFS_ASYNC_FINISH_PARALLEL"></a>ORFS_ASYNC_FINISH_PARALLEL| With ORFS_ASYNC_REPORTS=1, set to 1 to run each analyze_power_grid call of the final report as an async job as well, so the IR drop analyses of the power nets and the final report_metrics run side by side.| 0|
+| <a name="ORFS_ASYNC_JOB_SH"></a>ORFS_ASYNC_JOB_SH| Launcher of one async report job when ORFS_ASYNC_REPORTS=1, run as `bash <launcher> <job dir> <job name>`. It runs scripts/async_report.tcl in OpenROAD with ORFS_ASYNC_PARAMS=<job dir>/<job name>.params.tcl and writes the OpenROAD exit status to <job dir>/<job name>.exit last.| $(SCRIPTS_DIR)/async_job.sh|
+| <a name="ORFS_ASYNC_MIDSTEP"></a>ORFS_ASYNC_MIDSTEP| With ORFS_ASYNC_REPORTS=1, set to inline to keep the mid-step report_metrics calls (such as CTS before repair_timing) in the flow instead of reporting them from a snapshot ODB in an async job.| |
+| <a name="ORFS_ASYNC_REPORTS"></a>ORFS_ASYNC_REPORTS| Set to 1 to run the report_metrics calls of the OpenROAD steps as background OpenROAD processes (scripts/async_reports.tcl), started with ORFS_ASYNC_JOB_SH, so the flow continues while the reports are written. Calls on global-routing parasitics and the floorplan report stay in the flow. finish and do-finish end with the target async_reports_join: it waits for all jobs, fails when a job failed, and merges the job metrics into the step metrics files (flow/util/async_reports_merge.py). Result, report and metrics files are the same as without it, apart from runtime and memory metrics.| 0|
 | <a name="OR_K"></a>OR_K| Passed as -or_k to detailed routing.| |
 | <a name="OR_SEED"></a>OR_SEED| Passed as -or_seed to detailed routing.| |
 | <a name="PDN_TCL"></a>PDN_TCL| File path which has a set of power grid policies used by pdn to be applied to the design, such as layers to use, stripe width and spacing to generate the actual metal straps.| |
@@ -433,6 +437,8 @@ configuration file.
 - [MATCH_CELL_FOOTPRINT](#MATCH_CELL_FOOTPRINT)
 - [MAX_ROUTING_LAYER](#MAX_ROUTING_LAYER)
 - [MIN_ROUTING_LAYER](#MIN_ROUTING_LAYER)
+- [ORFS_ASYNC_JOB_SH](#ORFS_ASYNC_JOB_SH)
+- [ORFS_ASYNC_REPORTS](#ORFS_ASYNC_REPORTS)
 - [PDN_TCL](#PDN_TCL)
 - [PLACE_DENSITY](#PLACE_DENSITY)
 - [PLACE_DENSITY_LB_ADDON](#PLACE_DENSITY_LB_ADDON)
@@ -513,6 +519,8 @@ configuration file.
 - [MAX_ROUTING_LAYER](#MAX_ROUTING_LAYER)
 - [MIN_PLACE_STEP_COEF](#MIN_PLACE_STEP_COEF)
 - [MIN_ROUTING_LAYER](#MIN_ROUTING_LAYER)
+- [ORFS_ASYNC_JOB_SH](#ORFS_ASYNC_JOB_SH)
+- [ORFS_ASYNC_REPORTS](#ORFS_ASYNC_REPORTS)
 - [PLACE_DENSITY](#PLACE_DENSITY)
 - [PLACE_DENSITY_LB_ADDON](#PLACE_DENSITY_LB_ADDON)
 - [PLACE_PINS_ARGS](#PLACE_PINS_ARGS)
@@ -548,6 +556,9 @@ configuration file.
 - [LEC_AUX_VERILOG_FILES](#LEC_AUX_VERILOG_FILES)
 - [LEC_CHECK](#LEC_CHECK)
 - [MATCH_CELL_FOOTPRINT](#MATCH_CELL_FOOTPRINT)
+- [ORFS_ASYNC_JOB_SH](#ORFS_ASYNC_JOB_SH)
+- [ORFS_ASYNC_MIDSTEP](#ORFS_ASYNC_MIDSTEP)
+- [ORFS_ASYNC_REPORTS](#ORFS_ASYNC_REPORTS)
 - [POST_CTS_TCL](#POST_CTS_TCL)
 - [PRE_CTS_TCL](#PRE_CTS_TCL)
 - [REPORT_CLOCK_SKEW](#REPORT_CLOCK_SKEW)
@@ -579,6 +590,9 @@ configuration file.
 - [MAX_ROUTING_LAYER](#MAX_ROUTING_LAYER)
 - [MIN_ROUTING_LAYER](#MIN_ROUTING_LAYER)
 - [OPT_POST_GRT_WNS](#OPT_POST_GRT_WNS)
+- [ORFS_ASYNC_JOB_SH](#ORFS_ASYNC_JOB_SH)
+- [ORFS_ASYNC_MIDSTEP](#ORFS_ASYNC_MIDSTEP)
+- [ORFS_ASYNC_REPORTS](#ORFS_ASYNC_REPORTS)
 - [POST_GLOBAL_ROUTE_TCL](#POST_GLOBAL_ROUTE_TCL)
 - [PRE_GLOBAL_ROUTE_TCL](#PRE_GLOBAL_ROUTE_TCL)
 - [REPORT_CLOCK_SKEW](#REPORT_CLOCK_SKEW)
@@ -610,6 +624,8 @@ configuration file.
 - [MAX_REPAIR_ANTENNAS_ITER_DRT](#MAX_REPAIR_ANTENNAS_ITER_DRT)
 - [MAX_ROUTING_LAYER](#MAX_ROUTING_LAYER)
 - [MIN_ROUTING_LAYER](#MIN_ROUTING_LAYER)
+- [ORFS_ASYNC_JOB_SH](#ORFS_ASYNC_JOB_SH)
+- [ORFS_ASYNC_REPORTS](#ORFS_ASYNC_REPORTS)
 - [OR_K](#OR_K)
 - [OR_SEED](#OR_SEED)
 - [POST_DETAIL_ROUTE_TCL](#POST_DETAIL_ROUTE_TCL)
@@ -635,6 +651,9 @@ configuration file.
 - [LEC_CHECK](#LEC_CHECK)
 - [MAX_ROUTING_LAYER](#MAX_ROUTING_LAYER)
 - [MIN_ROUTING_LAYER](#MIN_ROUTING_LAYER)
+- [ORFS_ASYNC_FINISH_PARALLEL](#ORFS_ASYNC_FINISH_PARALLEL)
+- [ORFS_ASYNC_JOB_SH](#ORFS_ASYNC_JOB_SH)
+- [ORFS_ASYNC_REPORTS](#ORFS_ASYNC_REPORTS)
 - [POST_DENSITY_FILL_TCL](#POST_DENSITY_FILL_TCL)
 - [POST_FINAL_REPORT_TCL](#POST_FINAL_REPORT_TCL)
 - [PRE_DENSITY_FILL_TCL](#PRE_DENSITY_FILL_TCL)
