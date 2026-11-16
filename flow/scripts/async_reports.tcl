@@ -23,8 +23,11 @@
 #   metrics       each call leaves a placeholder metric "orfs_async__slot:<job>" at its position in the step's
 #                 metrics; flow/util/async_reports_merge.py replaces it with the job's metrics after the join and
 #                 adds the warnings the job's report section raised to the step's warning counts.
-# Jobs live in $RESULTS_DIR/async_reports/<name>.{params.tcl,sdc,odb,log,json,time,start,end,exit}; the flow
-# driver joins them at the end and runs the merge. Each spawn prints an ORFS_ASYNC line.
+# Jobs live in $RESULTS_DIR/async_reports/<name>.{params.tcl,sdc,odb,pid,log,json,time,start,end,exit}. Each job is
+# started with "bash $ORFS_ASYNC_JOB_SH <dir> <name>" (default scripts/async_job.sh), which writes <name>.exit last;
+# the spawn records the launcher pid in <name>.pid. "make finish" (and do-finish) ends with the target
+# async_reports_join: flow/util/async_reports_merge.py --wait waits until every job has its .exit (or its
+# launcher is gone), then merges, and fails when a job failed. Each spawn prints an ORFS_ASYNC line.
 
 set ::orfs_async_dir [file join $::env(RESULTS_DIR) async_reports]
 file mkdir $::orfs_async_dir
@@ -85,6 +88,8 @@ proc ::orfs_async_slot { name } {
 # Write the job parameters and start the job. odb is relative to RESULTS_DIR.
 proc ::orfs_async_spawn { name kind odb parasitics metrics_stage prewarm args } {
   set dir $::orfs_async_dir
+  # a rerun of the step starts the job again: the join must not see the previous run's status
+  file delete -force [file join $dir $name.exit] [file join $dir $name.end] [file join $dir $name.pid]
   set sdc async_reports/$name.sdc
   write_sdc -no_timestamp [file join $::env(RESULTS_DIR) $sdc]
   set f [open [file join $dir $name.params.tcl] w]
@@ -97,6 +102,9 @@ proc ::orfs_async_spawn { name kind odb parasitics metrics_stage prewarm args } 
   puts $f [list set ::async(args) $args]
   close $f
   set pid [exec bash $::env(ORFS_ASYNC_JOB_SH) $dir $name < /dev/null > /dev/null 2>@1 &]
+  set f [open [file join $dir $name.pid] w]
+  puts $f $pid
+  close $f
   puts "ORFS_ASYNC spawn step=$::orfs_t::step name=$name kind=$kind odb=$odb parasitics=$parasitics\
     prewarm=$prewarm pid=$pid t_us=[clock microseconds] args=$args"
   flush stdout

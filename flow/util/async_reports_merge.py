@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
-"""Merge the metrics of async report_metrics jobs into the step metrics (kit patch v2).
+"""Join and merge the async report_metrics jobs of ORFS_ASYNC_REPORTS=1 into the step metrics.
 
-usage: async_reports_merge.py <RESULTS_DIR>/async_reports <LOG_DIR>
+usage: async_reports_merge.py [--wait] <RESULTS_DIR>/async_reports <LOG_DIR>
+
+--wait (the Makefile target async_reports_join, run at the end of "make finish"): first wait until every job
+<job>.params.tcl in the directory has its <job>.exit, written last by the launcher (scripts/async_job.sh). A job
+whose launcher process (<job>.pid) is gone without writing <job>.exit counts as failed. Prints
+"ASYNC_JOIN wait_s=... end_epoch=... jobs=... failed=..." and one ASYNC_JOB_FAILED line per failed job.
 
 The main flow (scripts/async_reports.tcl) leaves a placeholder metric "<stage>orfs_async__slot:<job><suffix>" at
 the position an inline report_metrics / analyze_power_grid call would have written its metrics. For every step
@@ -13,12 +18,14 @@ metrics file <LOG_DIR>/<step>.json with placeholders this script
     (its JSON) minus the warnings its log printed before "ORFS_ASYNC_JOB section_begin" (load, parasitics,
     prewarm); flow__warnings__count, the per-id counts and flow__warnings__type_count are updated;
   - keeps the original file as async_reports/<step>.main.json and writes the merged file in the Logger format.
-A summary line per job goes to stdout; the exit status is 1 when a job failed, a placeholder has no job metrics,
-a stage does not match, or a warning count came out negative.
+Step files without placeholders (already merged) are left as they are, so the script can run again.
+A summary line per job goes to stdout and to async_reports/merge.log; the exit status is 1 when a job failed, a
+placeholder has no job metrics, a stage does not match, or a warning count came out negative.
 """
 import os
 import re
 import sys
+import time
 
 ENTRY = re.compile(r'^\t"(.*)": (.*)$')
 SLOT = 'orfs_async__slot:'
@@ -82,9 +89,9 @@ def merge_step(json_path, ad, problems):
         return []
     step = os.path.basename(json_path)[:-len('.json')]
     keep = os.path.join(ad, f'{step}.main.json')
-    if not os.path.exists(keep):
-        with open(keep, 'w', encoding='utf-8') as f:
-            f.write(open(json_path, encoding='utf-8').read())
+    # a file with placeholders is the step's own output (a rerun of the step writes it anew)
+    with open(keep, 'w', encoding='utf-8') as f:
+        f.write(open(json_path, encoding='utf-8').read())
     merged = []
     deltas = {}
     lines = []
@@ -175,17 +182,87 @@ def add_warnings(entries, deltas, step, problems):
     return rest
 
 
+def launcher_alive(pid_path):
+    """False when <job>.pid names a process that is gone (or a zombie); True otherwise, also without a pid file."""
+    try:
+        pid = int(open(pid_path).read().split()[0])
+    except (OSError, ValueError, IndexError):
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    try:
+        stat = open(f'/proc/{pid}/stat').read()
+        return stat.rsplit(')', 1)[1].split()[0] != 'Z'
+    except (OSError, IndexError):
+        return True
+
+
+def join(ad, emit, poll=0.5, report_every=60.0):
+    """Wait for every job in ad; return the number of failed jobs."""
+    t0 = time.time()
+    last_report = t0
+    while True:
+        names = sorted(f[:-len('.params.tcl')] for f in os.listdir(ad) if f.endswith('.params.tcl'))
+        # a job whose launcher is gone has either written its .exit just before or failed (checked below)
+        waiting = [n for n in names if not os.path.exists(os.path.join(ad, f'{n}.exit'))
+                   and launcher_alive(os.path.join(ad, f'{n}.pid'))]
+        if not waiting:
+            break
+        now = time.time()
+        if now - last_report >= report_every:
+            emit(f'ASYNC_JOIN waiting_s={now - t0:.0f} jobs={len(waiting)}: ' + ' '.join(waiting))
+            last_report = now
+        time.sleep(poll)
+    t1 = time.time()
+    failed = []
+    for n in names:
+        ep = os.path.join(ad, f'{n}.exit')
+        if os.path.exists(ep):
+            ex = open(ep).read().strip()
+            if ex != '0':
+                failed.append((n, f'exit={ex}'))
+        else:
+            failed.append((n, 'launcher gone without an exit status'))
+    for n, why in failed:
+        emit(f'ASYNC_JOB_FAILED {n} {why} log={os.path.join(ad, n + ".log")}')
+    emit(f'ASYNC_JOIN wait_s={t1 - t0:.3f} end_epoch={t1:.3f} jobs={len(names)} failed={len(failed)}')
+    return len(failed)
+
+
 def main():
-    ad, logs = sys.argv[1], sys.argv[2]
+    args = sys.argv[1:]
+    wait = bool(args) and args[0] == '--wait'
+    if wait:
+        args = args[1:]
+    if len(args) != 2:
+        print(__doc__, file=sys.stderr)
+        return 2
+    ad, logs = args
+    out = []
+
+    def emit(line):
+        print(line, flush=True)
+        out.append(line)
+
+    if not os.path.isdir(ad):
+        emit(f'MERGE_DONE problems=0 (no job directory {ad})')
+        return 0
+    failed = join(ad, emit) if wait else 0
     problems = []
     for f in sorted(os.listdir(logs)):
         if f.endswith('.json'):
             for line in merge_step(os.path.join(logs, f), ad, problems):
-                print(line)
+                emit(line)
     for p in problems:
-        print('MERGE_PROBLEM ' + p)
-    print(f'MERGE_DONE problems={len(problems)}')
-    return 1 if problems else 0
+        emit('MERGE_PROBLEM ' + p)
+    emit(f'MERGE_DONE problems={len(problems)}')
+    with open(os.path.join(ad, 'merge.log'), 'w', encoding='utf-8') as f:
+        f.write('\n'.join(out) + '\n')
+    return 1 if problems or failed else 0
 
 
 if __name__ == '__main__':

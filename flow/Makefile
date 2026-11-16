@@ -688,6 +688,9 @@ finish: $(LOG_DIR)/6_report.log \
         $(RESULTS_DIR)/6_final.v \
         $(RESULTS_DIR)/6_final.sdc \
         $(GDS_FINAL_FILE)
+ifeq ($(ORFS_ASYNC_REPORTS),1)
+	$(UNSET_AND_MAKE) async_reports_join
+endif
 	$(UNSET_AND_MAKE) elapsed
 
 .PHONY: elapsed
@@ -733,7 +736,20 @@ final: finish
 
 .PHONY: do-finish
 do-finish:
+ifeq ($(ORFS_ASYNC_REPORTS),1)
+	$(UNSET_AND_MAKE) do-6_1_fill do-6_1_fill.sdc do-6_report
+	$(UNSET_AND_MAKE) async_reports_join
+	$(UNSET_AND_MAKE) elapsed
+else
 	$(UNSET_AND_MAKE) do-6_1_fill do-6_1_fill.sdc do-6_report elapsed
+endif
+
+# ORFS_ASYNC_REPORTS=1: wait for the background report jobs of all steps so far (fails when one failed) and merge
+# their metrics into the step metrics files (flow/util/async_reports_merge.py). finish and do-finish end with it;
+# run it by hand after a flow that stops before finish.
+.PHONY: async_reports_join
+async_reports_join:
+	$(PYTHON_EXE) $(UTILS_DIR)/async_reports_merge.py --wait $(RESULTS_DIR)/async_reports $(LOG_DIR)
 
 .PHONY: generate_abstract
 generate_abstract: $(RESULTS_DIR)/6_final.gds $(RESULTS_DIR)/6_final.def  $(RESULTS_DIR)/6_final.v $(RESULTS_DIR)/6_final.sdc $(RESULTS_DIR)/6_final.spef

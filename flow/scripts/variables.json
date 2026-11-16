@@ -688,6 +688,44 @@
       "grt"
     ]
   },
+  "ORFS_ASYNC_FINISH_PARALLEL": {
+    "default": 0,
+    "description": "With ORFS_ASYNC_REPORTS=1, set to 1 to run each analyze_power_grid call of the final report as an async job as well, so the IR drop analyses of the power nets and the final report_metrics run side by side.\n",
+    "stages": [
+      "final"
+    ]
+  },
+  "ORFS_ASYNC_JOB_SH": {
+    "default": "$(SCRIPTS_DIR)/async_job.sh",
+    "description": "Launcher of one async report job when ORFS_ASYNC_REPORTS=1, run as `bash <launcher> <job dir> <job name>`. It runs scripts/async_report.tcl in OpenROAD with ORFS_ASYNC_PARAMS=<job dir>/<job name>.params.tcl and writes the OpenROAD exit status to <job dir>/<job name>.exit last.\n",
+    "stages": [
+      "floorplan",
+      "place",
+      "cts",
+      "grt",
+      "route",
+      "final"
+    ]
+  },
+  "ORFS_ASYNC_MIDSTEP": {
+    "description": "With ORFS_ASYNC_REPORTS=1, set to inline to keep the mid-step report_metrics calls (such as CTS before repair_timing) in the flow instead of reporting them from a snapshot ODB in an async job.\n",
+    "stages": [
+      "cts",
+      "grt"
+    ]
+  },
+  "ORFS_ASYNC_REPORTS": {
+    "default": 0,
+    "description": "Set to 1 to run the report_metrics calls of the OpenROAD steps as background OpenROAD processes (scripts/async_reports.tcl), started with ORFS_ASYNC_JOB_SH, so the flow continues while the reports are written. Calls on global-routing parasitics and the floorplan report stay in the flow. finish and do-finish end with the target async_reports_join: it waits for all jobs, fails when a job failed, and merges the job metrics into the step metrics files (flow/util/async_reports_merge.py). Result, report and metrics files are the same as without it, apart from runtime and memory metrics.\n",
+    "stages": [
+      "floorplan",
+      "place",
+      "cts",
+      "grt",
+      "route",
+      "final"
+    ]
+  },
   "OR_K": {
     "description": "Passed as -or_k to detailed routing.\n",
     "stages": [
