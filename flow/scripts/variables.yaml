@@ -1828,10 +1828,11 @@ ORFS_ASYNC_JOB_SH:
     - final
 ORFS_ASYNC_FINISH_PARALLEL:
   description: >
-    With ORFS_ASYNC_REPORTS=1, set to 1 to run each analyze_power_grid call
-    of the final report as an async job as well, so the IR drop analyses of
-    the power nets and the final report_metrics run side by side.
-  default: 0
+    With ORFS_ASYNC_REPORTS=1, each analyze_power_grid call of the final
+    report runs as an async job as well, so the IR drop analyses of the
+    power nets and the final report_metrics run side by side. On by
+    default; set to 0 to keep the IR drop analyses in the main flow.
+  default: 1
   stages:
     - final
 ORFS_ASYNC_MIDSTEP:

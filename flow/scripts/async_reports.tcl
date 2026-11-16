@@ -9,8 +9,9 @@
 #   mid-step calls      written to a snapshot ODB at the call and reported from it (4_1 cts pre-repair-timing);
 #                       ORFS_ASYNC_MIDSTEP=inline keeps them in the main flow
 #   6_report "finish"   reported from 6_final.odb + 6_final.spef as soon as it is called
-#   analyze_power_grid  with ORFS_ASYNC_FINISH_PARALLEL=1, one job per net (6_final.odb + SPEF), so the VDD and VSS
-#                       IR drop and the finish report run side by side
+#   analyze_power_grid  one job per net (6_final.odb + SPEF), so the VDD and VSS IR drop and the
+#                       finish report run side by side (default, ORFS_ASYNC_FINISH_PARALLEL unset
+#                       or 1); ORFS_ASYNC_FINISH_PARALLEL=0 keeps them in the main flow
 #   in the main flow    floorplan final (its report_power result depends on the process state: register activity
 #                       propagation does not converge, STA-2402) and every call on global-routing parasitics (a
 #                       reloaded ODB rebuilds them from the guides and does not reproduce the in-memory routes)
@@ -197,7 +198,10 @@ rename ::analyze_power_grid ::orfs_async_orig_analyze_power_grid
 proc ::analyze_power_grid { args } {
   set prewarm $::orfs_async_power_used
   set ::orfs_async_power_used 1
-  if { ![info exists ::env(ORFS_ASYNC_FINISH_PARALLEL)] || $::env(ORFS_ASYNC_FINISH_PARALLEL) ne "1" } {
+  if {
+    [info exists ::env(ORFS_ASYNC_FINISH_PARALLEL)]
+    && $::env(ORFS_ASYNC_FINISH_PARALLEL) eq "0"
+  } {
     return [uplevel 1 [list ::orfs_async_orig_analyze_power_grid {*}$args]]
   }
   set i [lsearch -exact $args -net]
