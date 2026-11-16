@@ -1,6 +1,7 @@
 # Delete routing obstructions for final DEF
 source $::env(SCRIPTS_DIR)/formal_check.tcl
 source $::env(SCRIPTS_DIR)/deleteRoutingObstructions.tcl
+::orfs_t::wrap deleteRoutingObstructions
 deleteRoutingObstructions
 
 write_def $::env(RESULTS_DIR)/6_final.def

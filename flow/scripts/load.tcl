@@ -61,3 +61,6 @@ proc load_design { design_file sdc_file } {
     log_cmd set_delay_calculator prima
   }
 }
+
+# N0.2 measurement patch: timed wrappers (util.tcl ::orfs_t), prints ORFS_CMD lines only.
+::orfs_t::install

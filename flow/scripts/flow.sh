@@ -10,6 +10,9 @@ RUN_CMD="${RUN_CMD:-$PYTHON_EXE $SCRIPTS_DIR/run_command.py}"
 
 echo "Running $2.tcl, stage $1"
 
+# N0.2 measurement patch: the step name for the ORFS_CMD timing lines (util.tcl).
+export ORFS_STEP="$1"
+
 (
   trap 'mv "$LOG_DIR/$1.tmp.log" "$LOG_DIR/$1.log"' EXIT
 

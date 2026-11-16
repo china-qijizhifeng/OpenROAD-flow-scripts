@@ -3,6 +3,119 @@ proc get_liberty_cell_names { } {
   return [tee -q -s result.string select -list-mod =A:liberty_cell]
 }
 
+# ORFS_CMD command timing (N0.2 measurement patch, prints only).
+# One line per timed call:
+#   ORFS_CMD step=<step> cmd=<name> call=<n> wall_s=<x> cpu_s=<y> depth=<d> parent=<name or -> code=<c>
+# depth 0 is a call made by no other timed call; the sum of depth-0 lines is the itemised part of a step.
+# parent is the innermost timed call around this one.
+# cpu_s is utime + stime of the whole process (all threads) from /proc/self/stat over the call.
+namespace eval ::orfs_t {
+  variable depth 0
+  variable stack {}
+  variable calls
+  array set calls {}
+  variable step unknown
+  if { [info exists ::env(ORFS_STEP)] } {
+    set step $::env(ORFS_STEP)
+  }
+}
+
+proc ::orfs_t::cpu_s { } {
+  if { [catch { set f [open /proc/self/stat r] }] } {
+    return -1
+  }
+  set s [read $f]
+  close $f
+  # Fields after the ")" of the command name start at field 3; utime and stime are fields 14 and 15,
+  # in USER_HZ ticks (100 per second on Linux).
+  set fields [split [string range $s [expr { [string last ")" $s] + 2 }] end] " "]
+  return [expr { ([lindex $fields 11] + [lindex $fields 12]) / 100.0 }]
+}
+
+proc ::orfs_t::now_us { } {
+  if { [catch { set t [clock microseconds] }] } {
+    return -1
+  }
+  return $t
+}
+
+proc ::orfs_t::begin { name } {
+  variable depth
+  variable stack
+  set parent [expr { $depth > 0 ? [lindex $stack end] : "-" }]
+  set mark [list [::orfs_t::now_us] [::orfs_t::cpu_s] $depth $parent]
+  incr depth
+  lappend stack $name
+  return $mark
+}
+
+proc ::orfs_t::end { name mark code } {
+  variable depth
+  variable calls
+  variable step
+  variable stack
+  incr depth -1
+  set stack [lrange $stack 0 end-1]
+  lassign $mark t0 c0 d parent
+  set t1 [::orfs_t::now_us]
+  set c1 [::orfs_t::cpu_s]
+  if { ![info exists calls($name)] } {
+    set calls($name) 0
+  }
+  set n [incr calls($name)]
+  set wall [expr { $t0 < 0 || $t1 < 0 ? -1 : ($t1 - $t0) / 1e6 }]
+  set cpu [expr { $c0 < 0 || $c1 < 0 ? -1 : $c1 - $c0 }]
+  puts [format "ORFS_CMD step=%s cmd=%s call=%d wall_s=%.6f cpu_s=%.2f depth=%d parent=%s code=%d" \
+    $step $name $n $wall $cpu $d $parent $code]
+}
+
+# Replace command <name> by a timed wrapper that calls the original in the caller's frame.
+# A command that does not exist (e.g. in yosys) or is already wrapped is left alone.
+proc ::orfs_t::wrap { name } {
+  set orig ::__orfst_[string map {:: __} [string trimleft $name :]]
+  if { [info commands ::$name] eq "" || [info commands $orig] ne "" } {
+    return
+  }
+  rename ::$name $orig
+  proc ::$name args [string map [list @NAME@ $name @ORIG@ $orig] {
+    set orfs_t_mark [::orfs_t::begin @NAME@]
+    set orfs_t_code [catch { uplevel 1 [list @ORIG@ {*}$args] } orfs_t_result orfs_t_opts]
+    ::orfs_t::end @NAME@ $orfs_t_mark $orfs_t_code
+    return -options $orfs_t_opts $orfs_t_result
+  }]
+}
+
+# Commands the step scripts call directly (not through log_cmd), the ORFS procs around them and the
+# report commands inside report_metrics. Called at the end of load.tcl (OpenROAD only).
+proc ::orfs_t::install { } {
+  if { [info commands ::ord::get_db] eq "" } {
+    return
+  }
+  foreach name {
+    erase_non_stage_variables load_design report_metrics write_endpoint_slack sta::find_timing
+    orfs_write_db orfs_write_sdc orfs_copy_db orfs_load_parasitics find_physical_only_masters
+    read_lef read_verilog check_setup report_units report_units_metric report_layer_rc
+    report_design_area report_design_area_metrics write_pin_placement write_macro_placement
+    cut_rows tapcell global_connect pdngen remove_buffers buffer_ports estimate_target_density
+    report_floating_nets repair_clock_inverters balance_row_usage check_placement set_propagated_clock
+    set_dont_use repair_antennas check_antennas design_is_routed write_guides report_cell_usage
+    write_def write_verilog write_lec_verilog define_process_corner set_extraction_rules_file
+    extract_parasitics write_spef read_spef set_pdnsim_net_voltage analyze_power_grid density_fill
+    report_tns report_tns_metric report_wns report_worst_slack report_worst_slack_metric
+    report_clock_min_period report_fmax_metric report_clock_skew report_clock_skew_metric
+    report_checks report_check_types report_erc_metrics find_timing_paths all_registers
+    report_power report_power_metric detailed_route
+  } {
+    ::orfs_t::wrap $name
+  }
+}
+
+if { ![info exists ::orfs_t::started] } {
+  set ::orfs_t::started 1
+  puts [format "ORFS_CMD_START step=%s t_us=%s cpu_s=%.2f" $::orfs_t::step [::orfs_t::now_us] \
+    [::orfs_t::cpu_s]]
+}
+
 proc log_cmd { cmd args } {
   # log the command, escape arguments with spaces
   set log_cmd "$cmd[join [lmap arg $args { format " %s" [expr { [string match {* *} $arg] ? "\"$arg\"" : "$arg" }] }] ""]" ;# tclint-disable-line line-length
@@ -15,7 +128,18 @@ proc log_cmd { cmd args } {
   if { $has_clock } {
     set start [clock seconds]
   }
-  set result [uplevel 1 [list $cmd {*}$args]]
+  # A command with its own timed wrapper (::orfs_t::wrap) is timed there.
+  set orfs_t_own [expr { [info commands ::__orfst_[string map {:: __} [string trimleft $cmd :]]] eq "" }]
+  if { $orfs_t_own } {
+    set orfs_t_mark [::orfs_t::begin $cmd]
+  }
+  set orfs_t_code [catch { uplevel 1 [list $cmd {*}$args] } result orfs_t_opts]
+  if { $orfs_t_own } {
+    ::orfs_t::end $cmd $orfs_t_mark $orfs_t_code
+  }
+  if { $orfs_t_code != 0 } {
+    return -options $orfs_t_opts $result
+  }
   if { $has_clock } {
     set time [expr { [clock seconds] - $start }]
     if { $time >= 5 } {
